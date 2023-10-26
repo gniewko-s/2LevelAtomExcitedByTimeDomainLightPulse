@@ -1,4 +1,7 @@
-     
+from TwoLevelAtom.general import General
+import numpy as np
+
+
 class SinglePhoton (General):
     def __init__(self,*args, **kwargs):
         super().__init__(*args,**kwargs)

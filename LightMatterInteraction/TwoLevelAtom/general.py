@@ -1,3 +1,14 @@
+from multiprocessing import Pool
+import numpy as np
+import matplotlib.pylab as plt
+from time import time
+import random
+import sys
+from scipy.integrate import odeint, solve_ivp, quad
+from scipy.optimize import minimize, minimize_scalar
+# from inputpulse import *
+
+
 class General():
     def __init__(self, xi: callable, Gamma,**kwargs):
         # Here xi is a function. It could be any function but it MUST satisfy the normalization condtion.

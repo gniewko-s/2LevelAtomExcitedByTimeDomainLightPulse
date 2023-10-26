@@ -1,3 +1,7 @@
+from TwoLevelAtom.general import General     
+import numpy as np
+
+
 class TwoPhoton (General):
     def __init__(self,*args, **kwargs):
         super().__init__(*args,**kwargs)
@@ -7,10 +11,13 @@ class TwoPhoton (General):
             self.lower_limit = -7/ min(self.Omega, self.Omega_2, self.Gamma) + self.Mu
         self.nBins = kwargs.get('nBins',1000)
         self.status = kwargs.get('status','indistinguishable')
+        if self.Mu != 0:
+            self.status = 'distinguishable: same direction'
+
         if self.status == 'indistinguishable':
             self.P = self.P_indistinguishable
         elif self.status == 'distinguishable: same direction':
-            self.P = self.P_distinguish_unidirection
+            self.P = self.P_dist_unidirection
         elif self.status == 'distinguishable: oppsite direction':
             self.P = self.P_dist_oppositeDirection
         else:
