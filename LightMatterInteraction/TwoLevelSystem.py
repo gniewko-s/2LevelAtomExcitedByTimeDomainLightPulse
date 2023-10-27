@@ -125,9 +125,6 @@ class SinglePhoton (General):
         p = self.Gamma*np.exp(-self.Gamma*tSteps)*np.abs(p)**2
         return tSteps, p
 
-from TwoLevelAtom.general import General     
-import numpy as np
-
 
 class TwoPhoton (General):
     def __init__(self,*args, **kwargs):
