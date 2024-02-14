@@ -18,8 +18,8 @@ class General():
         if np.abs(quad(lambda x: abs(self.xi(x))**2, -np.inf, np.inf)[0]-1) > 1e-6:
             raise ValueError("Invalid 'xi' function provided. Check the 'Normalization' constant.")
 
-        self.sigmaPlus =  kwargs.get('sigmaPlus',1)
-        self.sigmaMines =  kwargs.get('sigmaMines',1)
+        # self.sigmaPlus =  kwargs.get('sigmaPlus',1)
+        # self.sigmaMines =  kwargs.get('sigmaMines',1)
         # Gamma can not be negetive. If there is any Delta (loss), the Gamma will be a complex number.
         self.Gamma_1 = Gamma_1
         self.Gamma_2 = Gamma_2
@@ -55,7 +55,7 @@ class General():
         num_attempts = kwargs.get('num_attempts',1)
         num_processor = kwargs.get('num_processor',4)
         np.random.seed()
-        parameter_bounds = [(0, 4) if param == 'Mu'  else (0.4, 7.0) for param in parameters_to_optimize]
+        parameter_bounds = [(-4, 4) if param == 'Mu'  else (0.4, 7.0) for param in parameters_to_optimize]
         initial_guesses = [[np.random.uniform(lower, upper) for lower, upper in parameter_bounds] for _ in range(num_attempts)]
         with Pool(processes=num_processor) as pool:
             results = pool.starmap(self.optimize_single, [(initial_guess, parameters_to_optimize,  parameter_bounds) for initial_guess in initial_guesses])
@@ -120,41 +120,24 @@ class TwoPhoton (General):
     def P_correlated(self):
         if (self.lower_limit == -np.infty) or (self.upper_limit == np.infty) :
             if self.lower_limit == -np.infty :
-                self.lower_limit = -100
+                self.lower_limit = -10
             if self.upper_limit == np.infty :
-                self.upper_limit = 100
+                self.upper_limit = 10
             t, dt = np.linspace(self.lower_limit,self.upper_limit,1000,retstep=True)
             f = self.decomposition(t[:,np.newaxis],t[np.newaxis,:])        
             P = self.Gamma_1*self.Gamma_2*np.exp(-self.Gamma_2*t[:,np.newaxis])\
             * np.abs(np.cumsum(np.exp((self.Gamma_2-self.Gamma_1)*t[:,np.newaxis]/2) \
                                * np.cumsum(f*np.exp(self.Gamma_1*t/2)* np.tril(np.ones_like(f)),axis = 1)*dt ,axis=0)*dt)**2 
             P = np.diag(P)
-            t = t[np.abs(P)>self.tol]
-            self.lower_limit = t[0]
-            self.upper_limit = t[-1]
+            tt = t[np.abs(P)>self.tol]
+            if len(tt) == 0:
+                self.lower_limit = t[0]
+                self.upper_limit = t[-1]
+            else:
+                self.lower_limit = tt[0]
+                self.upper_limit = tt[-1]
+               
 
-            # self.lower_limit = -100/self.sigmaPlus
-        # if self.upper_limit == np.infty:
-        #     self.upper_limit = np.abs(self.lower_limit)
-        # if self.lower_limit == -np.infty :
-        #     label_L = True
-        #     self.lower_limit = -1e6
-        #     while True:
-        #         if max(np.abs(self.xi(self.lower_limit , Omega = self.Omega_1)) \
-        #                ,np.abs(self.phi(self.lower_limit , Omega = self.Omega_2, Mu = self.Mu)) ) > self.tol:
-        #             break
-        #         else : 
-        #             self.lower_limit = self.lower_limit/2 + self.lower_limit*0.01
-        # if self.upper_limit == np.infty :
-        #     label_U = True
-        #     self.upper_limit = 1e6
-        #     while True:
-        #         if max(np.exp(-self.Gamma_2*self.upper_limit) , np.abs(self.xi(self.upper_limit , Omega = self.Omega_1)) \
-        #                ,np.abs(self.phi(self.upper_limit , Omega = self.Omega_2, Mu = self.Mu))) > self.tol*1e-1:
-        #             break
-        #         else:
-        #             self.upper_limit = self.upper_limit/2 + self.upper_limit*0.01 #+self.Mu
-        #     self.upper_limit = self.upper_limit + self.Mu
         t, dt = np.linspace(self.lower_limit,self.upper_limit,self.nBins,retstep=True)
         f = self.decomposition(t[:,np.newaxis],t[np.newaxis,:])        
         P = self.Gamma_1*self.Gamma_2*np.exp(-self.Gamma_2*t[:,np.newaxis])\
@@ -166,7 +149,7 @@ class TwoPhoton (General):
         return t , P
 
     def decomposition(self,t1,t2):
-        return  np.sqrt(self.sigmaPlus*self.sigmaMines/(2*np.pi))*np.exp(-self.sigmaPlus**2*(t1+t2)**2/8-self.sigmaMines**2*(t1-t2)**2/8)
+        return  np.sqrt(self.Omega_1*self.Omega_2/(2*np.pi))*np.exp(-self.Omega_1**2*(t1+t2-self.Mu)**2/8-self.Omega_2**2*(t1-t2+self.Mu)**2/8)
 
     def P_anal (self,pulseShape='Exponential_raising'):
         if self.lower_limit == -np.infty :
@@ -197,14 +180,3 @@ class TwoPhoton (General):
             return t, P
 
         
-# class Correlated_TwoPhoton(General):
-#     def __init__(self,*args,**kwargs):
-#         super().__init__(*args,**kwargs)
-#         self.sigmaPlus = kwargs.get('sigmaPlus' , 0)
-        # self.tol = kwargs.get('tol',1e-4)
-        # self.nBins = kwargs.get('nBins',1000)
-        # self.status = kwargs.get('status','vectorized')
-        # if self.status == 'vectorized':
-        #     self.P = self.P_vect
-        # elif self.status == 'Analytical':
-        #     self.P = self.P_anal
