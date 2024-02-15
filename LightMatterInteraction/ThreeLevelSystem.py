@@ -78,6 +78,8 @@ class TwoPhoton (General):
             self.P = self.P_vect
         elif self.status == 'Correlated':
             self.P = self.P_correlated
+        elif self.status == 'Correlated_quad':
+            self.P = self.P_correlated_quad
         elif self.status == 'Analytical':
             self.P = self.P_anal
 
@@ -119,9 +121,13 @@ class TwoPhoton (General):
 
 
     def P_correlated_quad(self):
-        def intg(self, t):
-            return quad( lambda t2: np.exp((self.Gamma_2 - self.Gamma_1)*t2/2)*quad( lambda t1: np.exp(self.Gamma_1*t1/2)*self.decomposition(self,t1,t2) , -np.infty, t2 ) ,-np.infty, t)
-        
+        def intg(t):
+            return quad( lambda t2: np.exp(-self.Gamma_2*(t - t2)/2)*quad( lambda t1: np.exp(-self.Gamma_1*(t2- t1)/2)*self.decomposition(t2,t1) , -np.infty, t2,epsabs=1.49e-8 )[0] ,-np.infty, t,epsabs=1.49e-08)[0]
+        t = np.linspace(-4,10,self.nBins)/np.mean([self.Gamma_2,self.Gamma_1])
+        # t = np.linspace(-2*(1/self.Gamma_1 + 1/self.Gamma_2) - np.abs(self.Mu) , 5*(1/self.Gamma_1 + 1/self.Gamma_2 ) + np.abs(self.Mu) , self.nBins)
+        P = self.Gamma_1*self.Gamma_2*np.abs(np.array([intg(t1) for t1 in t]) )**2
+        print(t[0] , t[-1])
+        return t, P
     def P_correlated(self):
         if (self.lower_limit == -np.infty) or (self.upper_limit == np.infty) :
             if self.lower_limit == -np.infty :
