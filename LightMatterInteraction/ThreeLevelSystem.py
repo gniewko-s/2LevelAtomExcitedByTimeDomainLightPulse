@@ -116,6 +116,11 @@ class TwoPhoton (General):
         if label_U == True:
             self.upper_limit = np.infty
         return t, P
+
+
+    def P_correlated_quad(self):
+        def intg(self, t):
+            return quad( lambda t2: np.exp((self.Gamma_2 - self.Gamma_1)*t2/2)*quad( lambda t1: np.exp(self.Gamma_1*t1/2)*self.decomposition(self,t1,t2) , -np.infty, t2 ) ,-np.infty, t)
         
     def P_correlated(self):
         if (self.lower_limit == -np.infty) or (self.upper_limit == np.infty) :
