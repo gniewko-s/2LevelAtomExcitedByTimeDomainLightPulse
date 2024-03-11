@@ -6,7 +6,7 @@ import random
 import sys
 from scipy.integrate import odeint, solve_ivp, quad
 from scipy.optimize import minimize, minimize_scalar
-
+from numba import jit
 class General():
     def __init__(self, xi: callable, Gamma_1, Gamma_2,**kwargs):
         # Here xi is a function. It could be any function but it MUST satisfy the normalization condtion.
@@ -17,9 +17,6 @@ class General():
         self.phi = kwargs.get('phi',self.xi)
         if np.abs(quad(lambda x: abs(self.xi(x))**2, -np.inf, np.inf)[0]-1) > 1e-6:
             raise ValueError("Invalid 'xi' function provided. Check the 'Normalization' constant.")
-
-        # self.sigmaPlus =  kwargs.get('sigmaPlus',1)
-        # self.sigmaMines =  kwargs.get('sigmaMines',1)
         # Gamma can not be negetive. If there is any Delta (loss), the Gamma will be a complex number.
         self.Gamma_1 = Gamma_1
         self.Gamma_2 = Gamma_2
@@ -47,15 +44,15 @@ class General():
                 setattr(self, param_name, param_value)
             # self.Omega_2 = self.Omega_1
             t, p = self.P()
-            # print(f'p_max= {p.max()} | Omega1= {self.Omega_1} | Omega2= {self.Omega_2} | Gamma1 = {self.Gamma_1} | Gamma2 = {self.Gamma_2} | tRange[{t[0]},{t[-1]}]\n')
             return -np.max(p) 
         result = minimize(objective, params, method='Nelder-Mead', bounds=parameter_bounds)
         return -result.fun, result.x if result.success else None
     def optimize(self,parameters_to_optimize, **kwargs):
         num_attempts = kwargs.get('num_attempts',1)
         num_processor = kwargs.get('num_processor',4)
+        Mu_range = kwargs.get('Mu_range',[-2,4])
         np.random.seed()
-        parameter_bounds = [(-4, 4) if param == 'Mu'  else (0.4, 7.0) for param in parameters_to_optimize]
+        parameter_bounds = [(Mu_range[0], Mu_range[1]) if param == 'Mu'  else (0.2, 20) for param in parameters_to_optimize]
         initial_guesses = [[np.random.uniform(lower, upper) for lower, upper in parameter_bounds] for _ in range(num_attempts)]
         with Pool(processes=num_processor) as pool:
             results = pool.starmap(self.optimize_single, [(initial_guess, parameters_to_optimize,  parameter_bounds) for initial_guess in initial_guesses])
@@ -82,8 +79,17 @@ class TwoPhoton (General):
             self.P = self.P_correlated_quad
         elif self.status == 'Analytical':
             self.P = self.P_anal
+        elif self.status == 'Uncorrelated_quad':
+            self.P = self.P_Uncorrelated_quad
 
+    def P_Uncorrelated_quad(self):
+        def intg(t):
+            return quad( lambda t2:self.phi(t2,Omega = self.Omega_2, Mu = self.Mu)*np.exp(-self.Gamma_2*(t - t2)/2)*quad( lambda t1: self.xi(t1,Omega = self.Omega_1,Mu = 0)*np.exp(-self.Gamma_1*(t2- t1)/2), -np.infty, t2,epsabs=self.tol )[0] ,-np.infty, t,epsabs=self.tol)[0]
+        t = (np.linspace(-4,10,self.nBins)+self.Mu)/np.min([self.Gamma_1,self.Gamma_2])
+        P = self.Gamma_1*self.Gamma_2*np.abs(np.array([intg(t1) for t1 in t]) )**2
+        return t, P
     def P_vect(self):
+        label_L , label_U = False , False
         if self.lower_limit == -np.infty :
             label_L = True
             self.lower_limit = -1e6
@@ -103,7 +109,6 @@ class TwoPhoton (General):
                 else:
                     self.upper_limit = self.upper_limit/2 + self.upper_limit*0.01 #+self.Mu
             self.upper_limit = self.upper_limit + self.Mu
-
         t, dt = np.linspace(self.lower_limit,self.upper_limit,self.nBins,retstep=True)
         xi = self.xi(t,Omega = self.Omega_1,Mu = 0)
         phi = self.phi(t,Omega = self.Omega_2, Mu = self.Mu)
@@ -122,11 +127,11 @@ class TwoPhoton (General):
 
     def P_correlated_quad(self):
         def intg(t):
-            return quad( lambda t2: np.exp(-self.Gamma_2*(t - t2)/2)*quad( lambda t1: np.exp(-self.Gamma_1*(t2- t1)/2)*self.decomposition(t2,t1) , -np.infty, t2,epsabs=1.49e-8 )[0] ,-np.infty, t,epsabs=1.49e-08)[0]
-        t = np.linspace(-4,10,self.nBins)/np.mean([self.Gamma_2,self.Gamma_1])
+            return quad( lambda t2: np.exp(-self.Gamma_2*(t - t2)/2)*quad( lambda t1: np.exp(-self.Gamma_1*(t2- t1)/2)*self.decomposition(t1,t2) , -np.infty, t2,epsabs=self.tol )[0] ,-np.infty, t,epsabs=self.tol)[0]
+        # t = np.linspace(-4,10,self.nBins)/np.min([self.Gamma_2,self.Gamma_1,self.Omega_1,self.Omega_2])
+        t = (np.linspace(-4,10,self.nBins)+self.Mu)/np.min([self.Gamma_1,self.Gamma_2])
         # t = np.linspace(-2*(1/self.Gamma_1 + 1/self.Gamma_2) - np.abs(self.Mu) , 5*(1/self.Gamma_1 + 1/self.Gamma_2 ) + np.abs(self.Mu) , self.nBins)
         P = self.Gamma_1*self.Gamma_2*np.abs(np.array([intg(t1) for t1 in t]) )**2
-        print(t[0] , t[-1])
         return t, P
     def P_correlated(self):
         if (self.lower_limit == -np.infty) or (self.upper_limit == np.infty) :
@@ -135,7 +140,7 @@ class TwoPhoton (General):
             if self.upper_limit == np.infty :
                 self.upper_limit = 10
             t, dt = np.linspace(self.lower_limit,self.upper_limit,1000,retstep=True)
-            f = self.decomposition(t[:,np.newaxis],t[np.newaxis,:])        
+            f = self.decomposition(t[np.newaxis:],t[:,np.newaxis])        
             P = self.Gamma_1*self.Gamma_2*np.exp(-self.Gamma_2*t[:,np.newaxis])\
             * np.abs(np.cumsum(np.exp((self.Gamma_2-self.Gamma_1)*t[:,np.newaxis]/2) \
                                * np.cumsum(f*np.exp(self.Gamma_1*t/2)* np.tril(np.ones_like(f)),axis = 1)*dt ,axis=0)*dt)**2 
@@ -147,10 +152,9 @@ class TwoPhoton (General):
             else:
                 self.lower_limit = tt[0]
                 self.upper_limit = tt[-1]
-               
 
         t, dt = np.linspace(self.lower_limit,self.upper_limit,self.nBins,retstep=True)
-        f = self.decomposition(t[:,np.newaxis],t[np.newaxis,:])        
+        f = self.decomposition(t[np.newaxis,:],t[:,np.newaxis])        
         P = self.Gamma_1*self.Gamma_2*np.exp(-self.Gamma_2*t[:,np.newaxis])\
         * np.abs(np.cumsum(np.exp((self.Gamma_2-self.Gamma_1)*t[:,np.newaxis]/2) \
                            * np.cumsum(f*np.exp(self.Gamma_1*t/2)* np.tril(np.ones_like(f)),axis = 1)*dt ,axis=0)*dt)**2 
@@ -161,8 +165,10 @@ class TwoPhoton (General):
 
     def decomposition(self,t1,t2):
         return  np.sqrt(self.Omega_1*self.Omega_2/(2*np.pi))*np.exp(-self.Omega_1**2*(t1+t2-self.Mu)**2/8-self.Omega_2**2*(t1-t2+self.Mu)**2/8)
+        # return  np.sqrt(self.Omega_1/(2*np.pi))*np.exp(-self.Omega_1**2*(t1+t2-self.Mu)**2/8-self.Omega_2**2*(t1-t2+self.Mu)**2/8)
 
-    def P_anal (self,pulseShape='Exponential_raising'):
+    def P_anal (self):
+        pulseShape=self.xi.__name__
         if self.lower_limit == -np.infty :
             self.lower_limit = -1e6
             while True:
@@ -180,7 +186,7 @@ class TwoPhoton (General):
                     self.upper_limit = self.upper_limit/2 + self.upper_limit*0.01 #+self.Mu
             self.upper_limit = self.upper_limit + self.Mu
         # Analitical solution for exponential raising in the case Mu = 0
-        if pulseShape == 'Exponential_raising':
+        if pulseShape == 'ExpoRaising':
             t, dt = np.linspace(self.lower_limit,self.upper_limit,self.nBins,retstep=True)
             t1 = t[t<=0]
             t2 = t[t>0]
@@ -188,6 +194,51 @@ class TwoPhoton (General):
             P_t1 = coef*np.exp((self.Omega_1+self.Omega_2)*t1)
             P_t2 = coef* np.exp(-self.Gamma_2*t2)
             P = np.append(P_t1,P_t2 )
+            return t, P
+        elif pulseShape == 'ExpoDecay':
+            # t, dt = np.linspace(self.lower_limit,self.upper_limit,self.nBins,retstep=True)
+            # X = complex(self.Delta_1) + self.Gamma_1/2 -self.Omega_1/2
+            # Y = complex(self.Delta_2) + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+            # Z = complex(self.Delta_1 + self.Delta_2) + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+            # coef = self.Gamma_1*self.Gamma_2*self.Omega_1*self.Omega_2*np.exp(-self.Gamma_2*t + self.Omega_2*self.Mu)
+            # if X == 0 :
+            #     self.Omega_1 += self.Omega_1*0.0001
+            #     X = complex(self.Delta_1) + self.Gamma_1/2 -self.Omega_1/2
+            #     Y = complex(self.Delta_2) + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+            #     Z = complex(self.Delta_1 + self.Delta_2) + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+            # if Y == 0 :
+            #     self.Omega_2 += self.Omega_2*0.0001
+            #     X = complex(self.Delta_1) + self.Gamma_1/2 -self.Omega_1/2
+            #     Y = complex(self.Delta_2) + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+            #     Z = complex(self.Delta_1 + self.Delta_2) + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+            # if Z == 0 :
+            #     self.Omega_1 += self.Omega_1*0.0001
+            #     X = complex(self.Delta_1) + self.Gamma_1/2 -self.Omega_1/2
+            #     Y = complex(self.Delta_2) + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+            #     Z = complex(self.Delta_1 + self.Delta_2) + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+            t, dt = np.linspace(self.lower_limit,self.upper_limit,self.nBins,retstep=True)
+            X =  self.Gamma_1/2 -self.Omega_1/2
+            Y =  (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+            Z =  self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+            coef = self.Gamma_1*self.Gamma_2*self.Omega_1*self.Omega_2*np.exp(-self.Gamma_2*t + self.Omega_2*self.Mu)
+            if X == 0 :
+                self.Omega_1 += self.Omega_1*0.0001
+                X =  self.Gamma_1/2 -self.Omega_1/2
+                Y =  (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+                Z =  self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+            if Y == 0 :
+                self.Omega_2 += self.Omega_2*0.0001
+                X =  self.Gamma_1/2 -self.Omega_1/2
+                Y =  (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+                Z =  self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+            if Z == 0 :
+                self.Omega_1 += self.Omega_1*0.0001
+                X =  self.Gamma_1/2 -self.Omega_1/2
+                Y =  (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+                Z =  self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+                    
+            P =coef /((X)**2) *np.abs((np.exp(Z*t) - np.exp(Z*self.Mu))/Z - (np.exp(Y*t) - np.exp(Y*self.Mu))/Y )**2
+            P[t<self.Mu] = 0
             return t, P
 
         
