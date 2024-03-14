@@ -4,7 +4,7 @@ import matplotlib.pylab as plt
 from time import time
 import random
 import sys
-from scipy.integrate import odeint, solve_ivp, quad
+from scipy.integrate import complex_ode, solve_ivp, quad
 from scipy.optimize import minimize, minimize_scalar
 from numba import jit
 
@@ -22,6 +22,8 @@ class General():
             Delta_1 (float, optional): The first dispersion value '\Delta_1'. Default is 0.
             Delta_2 (float, optional): The second dispersion value '\Delta_2'. Default is 0.
             tRange (list, optional): The time range in which P should be computed. Default is [-np.infty, +np.infty].
+            n_1 (float, optional): Mean number of the photon for first profile (For coherent case). Default is 1
+            n_2 (float, optional): Mean number of the photon for second profile (For coherent case). Default is 1
             
         """
 
@@ -30,7 +32,8 @@ class General():
         self.Mu = kwargs.get('Mu', 0)
         self.xi = xi
         self.phi = kwargs.get('phi', self.xi)
-        
+        self.n_1 = kwargs.get('n_1' , 1)   # Mean number of the photon for first profile (For coherent case)
+        self.n_2 = kwargs.get('n_2' , 1)   # Mean number of the photon for second profile (For coherent case)
 
         # Check normalization condition
         if np.abs(quad(lambda x: abs(self.xi(x))**2, -np.inf, np.inf)[0] - 1) > 1e-6:
@@ -42,11 +45,13 @@ class General():
             raise ValueError("Gamma must be 'positive'.")
         # Calculate complex Gamma if Delta is provided
         self.Delta_1 = kwargs.get('Delta_1', 0)
-        if self.Delta_1 != 0:
-            self.gamma_1 = complex(self.Gamma_1, 2 * self.Delta_1)
+        self.Delta_1 = complex(0,self.Delta_1)
+        # if self.Delta_1 != 0:
+        #     self.gamma_1 = complex(self.Gamma_1, 2 * self.Delta_1)
         self.Delta_2 = kwargs.get('Delta_2', 0)
-        if self.Delta_2 != 0:
-            self.gamma_2 = complex(self.Gamma_2, 2 * self.Delta_2)
+        self.Delta_2 = complex(0,self.Delta_2)
+        # if self.Delta_2 != 0:
+        #     self.gamma_2 = complex(self.Gamma_2, 2 * self.Delta_2)
         # Set time range
         self.tRange = kwargs.get('tRange', [-np.infty, +np.infty])
         self.lower_limit = self.tRange[0]
@@ -110,7 +115,10 @@ class General():
         Returns:
         dict: Optimized P value and parameters if successful; otherwise, returns None.
         """
+        import warnings
 
+        # Ignore all warnings
+        warnings.filterwarnings("ignore")
         num_attempts = kwargs.get('num_attempts', 1)
         num_processor = kwargs.get('num_processor', 4)
         Mu_range = kwargs.get('Mu_range', [-2, 4])
@@ -124,8 +132,10 @@ class General():
             optimized_P = best_result[0]
             optimized_params = {param_name: param_value for param_name, param_value in zip(parameters_to_optimize, best_result[1])}
             optimized_P = {'P_max': optimized_P}
+            warnings.resetwarnings()
             return {**optimized_P, **optimized_params}
         else:
+            warnings.resetwarnings()
             return None
 
 class TwoPhoton(General):
@@ -169,7 +179,8 @@ class TwoPhoton(General):
             self.P = self.P_anal
         elif self.status == 'Uncorrelated_quad':
             self.P = self.P_Uncorrelated_quad
-
+        elif self.status == 'Coherent':
+            self.P = self.P_coherent
     def P_Uncorrelated_quad(self):
         """
         Calculates P for uncorrelated case using quad.
@@ -178,7 +189,7 @@ class TwoPhoton(General):
         tuple: Time array and P values.
         """
         def intg(t):
-            return quad(lambda t2: self.phi(t2, Omega=self.Omega_2, Mu=self.Mu) * np.exp(-self.Gamma_2 * (t - t2) / 2) * quad(lambda t1: self.xi(t1, Omega=self.Omega_1, Mu=0) * np.exp(-self.Gamma_1 * (t2 - t1) / 2), -np.infty, t2, epsabs=self.tol)[0], -np.infty, t, epsabs=self.tol)[0]
+            return quad(lambda t2: self.phi(t2, Omega=self.Omega_2, Mu=self.Mu) * np.exp(-(self.Delta_2 + self.Gamma_2/2) * (t - t2)) * quad(lambda t1: self.xi(t1, Omega=self.Omega_1, Mu=0) * np.exp(-self.Gamma_1 * (t2 - t1) / 2) * np.exp(self.Delta_1*t1), -np.infty, t2, epsabs=self.tol)[0], -np.infty, t, epsabs=self.tol)[0]
         t = (np.linspace(-4, 10, self.nBins) + self.Mu) / np.min([self.Gamma_1, self.Gamma_2])
         P = self.Gamma_1 * self.Gamma_2 * np.abs(np.array([intg(t1) for t1 in t])) ** 2
         return t, P
@@ -218,8 +229,8 @@ class TwoPhoton(General):
         ones = np.ones([len(xi),len(xi)])
 
         P = self.Gamma_1*self.Gamma_2*np.exp(-self.Gamma_2*t[:,np.newaxis])\
-        * np.abs(np.cumsum(phi[:,np.newaxis]*np.exp((self.Gamma_2-self.Gamma_1)*t[:,np.newaxis]/2) \
-                           * np.cumsum(xi[np.newaxis,:]*np.exp(self.Gamma_1*t/2)* np.tril(ones),axis = 1)*dt ,axis=0)*dt)**2 
+        * np.abs(np.cumsum(phi[:,np.newaxis]*np.exp((self.Delta_2+(self.Gamma_2-self.Gamma_1)/2)*t[:,np.newaxis]) \
+                           * np.cumsum(xi[np.newaxis,:]*np.exp((self.Delta_1 + self.Gamma_1/2)*t)* np.tril(ones),axis = 1)*dt ,axis=0)*dt)**2 
         P = np.diag(P)
         if label_L == True:
             self.lower_limit = -np.infty
@@ -236,7 +247,7 @@ class TwoPhoton(General):
         tuple: Time array and P values.
         """
         def intg(t):
-            return quad( lambda t2: np.exp(-self.Gamma_2*(t - t2)/2)*quad( lambda t1: np.exp(-self.Gamma_1*(t2- t1)/2)*self.psi(t1,t2) , -np.infty, t2,epsabs=self.tol )[0] ,-np.infty, t,epsabs=self.tol)[0]
+            return quad( lambda t2: np.exp(-(self.Delta_2+self.Gamma_2/2)*(t - t2))*quad( lambda t1: np.exp(-self.Gamma_1*(t2- t1)/2 + self.Delta_1*t1)*self.psi(t1,t2) , -np.infty, t2,epsabs=self.tol )[0] ,-np.infty, t,epsabs=self.tol)[0]
         # t = np.linspace(-4,10,self.nBins)/np.min([self.Gamma_2,self.Gamma_1,self.Omega_1,self.Omega_2])
         t = (np.linspace(-4,10,self.nBins)+self.Mu)/np.min([self.Gamma_1,self.Gamma_2])
         # t = np.linspace(-2*(1/self.Gamma_1 + 1/self.Gamma_2) - np.abs(self.Mu) , 5*(1/self.Gamma_1 + 1/self.Gamma_2 ) + np.abs(self.Mu) , self.nBins)
@@ -275,8 +286,8 @@ class TwoPhoton(General):
         t, dt = np.linspace(self.lower_limit,self.upper_limit,self.nBins,retstep=True)
         f = self.psi(t[np.newaxis,:],t[:,np.newaxis])        
         P = self.Gamma_1*self.Gamma_2*np.exp(-self.Gamma_2*t[:,np.newaxis])\
-        * np.abs(np.cumsum(np.exp((self.Gamma_2-self.Gamma_1)*t[:,np.newaxis]/2) \
-                           * np.cumsum(f*np.exp(self.Gamma_1*t/2)* np.tril(np.ones_like(f)),axis = 1)*dt ,axis=0)*dt)**2 
+        * np.abs(np.cumsum(np.exp((self.Delta_2 + (self.Gamma_2-self.Gamma_1)/2)*t[:,np.newaxis]) \
+                           * np.cumsum(f*np.exp((self.Delta_1 + self.Gamma_1/2)*t)* np.tril(np.ones_like(f)),axis = 1)*dt ,axis=0)*dt)**2 
         P = np.diag(P)
         return t , P
 
@@ -339,20 +350,47 @@ class TwoPhoton(General):
             coef = self.Gamma_1*self.Gamma_2*self.Omega_1*self.Omega_2*np.exp(-self.Gamma_2*t + self.Omega_2*self.Mu)
             if np.abs(X) < 1e5 :
                 self.Omega_1 += self.Omega_1*0.0001
-                X = complex(self.Delta_1) + self.Gamma_1/2 -self.Omega_1/2
-                Y = complex(self.Delta_2) + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
-                Z = complex(self.Delta_1 + self.Delta_2) + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+                X = self.Delta_1 + self.Gamma_1/2 -self.Omega_1/2
+                Y = self.Delta_2 + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+                Z = self.Delta_1 + self.Delta_2 + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
             if np.abs(Y) < 1e5 :
                 self.Omega_2 += self.Omega_2*0.0001
-                X = complex(self.Delta_1) + self.Gamma_1/2 -self.Omega_1/2
-                Y = complex(self.Delta_2) + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
-                Z = complex(self.Delta_1 + self.Delta_2) + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
+                X = self.Delta_1 + self.Gamma_1/2 -self.Omega_1/2
+                Y = self.Delta_2 + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+                Z = self.Delta_1 + self.Delta_2 + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2
             if np.abs(Z) < 1e5 :
                 self.Omega_1 += self.Omega_1*0.0001
-                X = complex(self.Delta_1) + self.Gamma_1/2 -self.Omega_1/2
-                Y = complex(self.Delta_2) + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
-                Z = complex(self.Delta_1 + self.Delta_2) + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2                    
+                X = self.Delta_1 + self.Gamma_1/2 -self.Omega_1/2
+                Y = self.Delta_2 + (self.Gamma_2 - self.Gamma_1)/2 -self.Omega_2/2
+                Z = self.Delta_1 + self.Delta_2 + self.Gamma_2/2 - (self.Omega_1 + self.Omega_2)/2                    
             P =coef /(np.abs(X)**2) *np.abs((np.exp(Z*t) - np.exp(Z*self.Mu))/Z - (np.exp(Y*t) - np.exp(Y*self.Mu))/Y )**2
             P[t<self.Mu] = 0
             return t, P
+        
+    def P_coherent(self):
+        def rhs(t, initial):
+            Rho_ff, Rho_ef, Rho_gf, Rho_ee, Rho_ge, Rho_gg = initial 
+            alpha_1 = self.xi(t,Omega = self.Omega_1,Mu = 0)
+            alpha_1 =  np.sqrt(self.Gamma_1 * self.n_1) * alpha_1
+            alpha_2 = self.phi(t,Omega = self.Omega_2,Mu = self.Mu)
+            alpha_2 = np.sqrt(self.Gamma_2 * self.n_2) * alpha_2
+            dRho_ffdt = - alpha_2 * (Rho_ef + np.conjugate(Rho_ef)) - self.Gamma_2 * Rho_ff
+            dRho_efdt = self.Delta_2 * Rho_ef - alpha_1 * Rho_gf +  alpha_2 * (Rho_ff - Rho_ee) - (self.Gamma_1 + self.Gamma_2)*Rho_ef/2
+            dRho_gfdt = (self.Delta_1 + self.Delta_2) * Rho_gf + alpha_1 * Rho_ef - alpha_2 * Rho_ge - self.Gamma_2 * Rho_gf/2
+            dRho_eedt = - alpha_1 * (Rho_ge + np.conjugate(Rho_ge)) + alpha_2 * (Rho_ef + np.conjugate(Rho_ef)) - self.Gamma_1*Rho_ee  + self.Gamma_2*Rho_ff
+            dRho_gedt = self.Delta_1 * Rho_ge + alpha_2 * Rho_gf + alpha_1 * (Rho_ee - Rho_gg) - self.Gamma_1 * Rho_ge / 2
+            dRho_ggdt = alpha_1 * (Rho_ge + np.conjugate(Rho_ge)) + self.Gamma_1 * Rho_ee
+            return [dRho_ffdt, dRho_efdt, dRho_gfdt, dRho_eedt, dRho_gedt, dRho_ggdt]
+            
+        initial_condition = [0 , 0 , 0 , 0 , 0 , 1 ]
+        t = (np.linspace(-4,10,self.nBins)+self.Mu)/np.min([self.Gamma_1,self.Gamma_2])
+        solver = complex_ode(rhs)
+        solver.set_initial_value(initial_condition, t[0])
+        r = []
+        for time in t[1:]:
+            r.append(solver.integrate(time))
+        r.insert(0, initial_condition)
+        r = np.array(r)
+        return t,  r[:,0]
+        
         
